@@ -11,7 +11,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
 # Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Google Sheets setup
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -85,19 +85,18 @@ async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
             member_name = record['Member Name']
             await context.bot.send_message(chat_id=USER_ID, text=f"{member_name} ရဲ့ membership expires in 1 day.")
 
-# Main function
-async def main():
+# Main function (Polling)
+def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Add handlers
+    # Add command handler
     app.add_handler(CommandHandler("check", check_command))
 
-    # Schedule reminder every day at midnight
+    # Daily reminder at midnight (UTC timezone by default)
     app.job_queue.run_daily(send_reminder, time=dtime(hour=0, minute=0))
 
-    # Start polling
-    await app.run_polling()
+    # Start polling (no need for asyncio.run)
+    app.run_polling()
 
-if __name__ == '__main__':
-    import asyncio
-    asyncio.run(main())
+if __name__ == "__main__":
+    main()
