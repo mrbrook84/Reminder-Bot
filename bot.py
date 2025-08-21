@@ -10,6 +10,7 @@ import time
 import logging
 import os
 import asyncio
+import json  # Added import for json module
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
