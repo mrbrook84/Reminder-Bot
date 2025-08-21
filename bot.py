@@ -30,30 +30,23 @@ scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scope)
 client = gspread.authorize(creds)
 
-# Sheet settings (edit if your worksheet/tab name differs)
-PAYMENT_SHEET_TITLE = "Form Responses 1"
-
-# Replace with your actual Google Sheet IDs
+# Sheet IDs
 PAYMENT_SHEET_ID = "1ffDReFiVQfH3Ss2nUEclha3cW8X2h3dglrdFtZX4cjc"
-APPLICATION_SHEET_ID = "1WVqOCZeSGwoZuw5bauDn5eaLO51XLcMDhcZPWuKkrxw"  # not used below, but kept
+APPLICATION_SHEET_ID = "1WVqOCZeSGwoZuw5bauDn5eaLO51XLcMDhcZPWuKkrxw"
 
+# Sheet Titles
+PAYMENT_SHEET_TITLE = "Form Responses 1"
+APPLICATION_SHEET_TITLE = "Form_Responses"
+
+# Worksheets
 payment_ws = client.open_by_key(PAYMENT_SHEET_ID).worksheet(PAYMENT_SHEET_TITLE)
-# application_ws = client.open_by_key(APPLICATION_SHEET_ID).worksheet(PAYMENT_SHEET_TITLE)
+application_ws = client.open_by_key(APPLICATION_SHEET_ID).worksheet(APPLICATION_SHEET_TITLE)
 
 # ---------- Helpers ----------
 def parse_date_flexible(s: str):
-    """
-    Parse many common date formats from Google Sheets:
-    - "8/21/2025 15:23:11"
-    - "8/21/2025 0:26:04"
-    - "8/21/2025"
-    - and general variations (handled by dateutil)
-    Returns timezone-aware datetime in TZ, or None.
-    """
     if not s:
         return None
     s = str(s).strip()
-    # special: allow "m/yyyy" -> use day 1
     m = re.fullmatch(r"(\d{1,2})/(\d{4})", s)
     if m:
         month, year = int(m.group(1)), int(m.group(2))
@@ -70,27 +63,18 @@ def parse_date_flexible(s: str):
         return None
 
 def parse_duration_months(comment: str) -> int:
-    """
-    Extract duration in months from "Any additional comments?".
-    - Default 1 month if missing
-    - Accepts "1 month", "3 months", "12 months", "for 3 months", "3 mo", "3 mth", etc.
-    """
     if not comment:
         return 1
     comment = str(comment).lower()
     m = re.search(r"(\d+)\s*(?:month|months|mo|mth|mnt)\b", comment)
     if m:
         months = int(m.group(1))
-        # basic sanity clamp
         return max(1, min(months, 60))
     return 1
 
 def pick_start_date(record: dict):
-    """
-    Prefer Payment Month if present; otherwise use Timestamp.
-    """
     ts = record.get("Timestamp") or record.get("timestamp")
-    pay = record.get("Payment Month") or record.get("Payment Month ") or record.get("Pay Month")  # tolerant keys
+    pay = record.get("Payment Month") or record.get("Payment Month ") or record.get("Pay Month")
     pay_dt = parse_date_flexible(pay) if pay else None
     ts_dt = parse_date_flexible(ts) if ts else None
     return pay_dt or ts_dt
@@ -105,37 +89,28 @@ def get_name(record: dict) -> str:
     )
 
 def get_comment(record: dict) -> str:
-    # tolerate both plural/singular headers
     return record.get("Any additional comments?") or record.get("Any additional comment?") or ""
 
 def compute_status(record: dict):
-    """
-    Given a sheet row dict, compute:
-      - start_date (Payment Month preferred)
-      - months
-      - expiry_date
-      - days_left
-    Returns tuple or None if cannot compute.
-    """
     start_date = pick_start_date(record)
     if not start_date:
         return None
-
     months = parse_duration_months(get_comment(record))
     expiry_date = start_date + relativedelta(months=months)
-
     now = datetime.now(TZ)
-    days_left = (expiry_date.date() - now.date()).days  # date-based difference
+    days_left = (expiry_date.date() - now.date()).days
     return start_date, months, expiry_date, days_left
 
 def latest_record_for_email(email: str):
     """
-    Scan all records for this email; pick the one with the latest start_date.
+    Scan both sheets for this email; pick the one with the latest start_date.
     """
-    records = payment_ws.get_all_records()
+    records = []
+    records.extend(payment_ws.get_all_records())
+    records.extend(application_ws.get_all_records())
+
     best = None
     best_start = None
-
     for r in records:
         e = (r.get("Email Address") or r.get("Email") or "").strip().lower()
         if e != email.strip().lower():
@@ -147,15 +122,14 @@ def latest_record_for_email(email: str):
         if (best_start is None) or (start_date > best_start):
             best_start = start_date
             best = r
-
     return best
 
 # ---------- Telegram Handlers ----------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Hello! 🔎 ใช้คำสั่ง\n"
+        "Hello! 🔎 Use command\n"
         "/check <email>\n"
-        "membership ကျန်ထားသေးသလား စစ်ပေးနိုင်ပါတယ်။"
+        "to check membership validity."
     )
 
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -180,7 +154,6 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         used_source = "Payment Month" if rec.get("Payment Month") else "Timestamp"
         tier = rec.get("Preferred Membership Tier") or rec.get("Membership Tier") or "-"
 
-        # Nicely formatted reply
         text = (
             f"👤 {name}\n"
             f"📧 {email}\n"
@@ -206,12 +179,11 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("An error occurred. Please try again.")
 
 async def daily_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Send a reminder to admin USER_ID for members expiring in 1 day (latest per email).
-    """
     try:
-        records = payment_ws.get_all_records()
-        # Build latest-by-email first
+        records = []
+        records.extend(payment_ws.get_all_records())
+        records.extend(application_ws.get_all_records())
+
         latest_by_email = {}
         for r in records:
             email = (r.get("Email Address") or r.get("Email") or "").strip().lower()
@@ -225,19 +197,32 @@ async def daily_reminder(context: ContextTypes.DEFAULT_TYPE):
             if (prev is None) or (start_date > prev[0]):
                 latest_by_email[email] = (start_date, r)
 
-        # Check expiring
-        msgs = []
+        # Collect reminders
+        reminders = []
         for email, (_, r) in latest_by_email.items():
             res = compute_status(r)
             if not res:
                 continue
             _, _, expiry_date, days_left = res
-            if days_left == 1:
+            if days_left == 1:  # only tomorrow
                 name = get_name(r)
-                msgs.append(f"⏰ {name} ({email}) expires tomorrow ({expiry_date.strftime('%Y-%m-%d')})")
+                tier = r.get("Preferred Membership Tier") or r.get("Membership Tier") or "-"
+                reminders.append((name, email, tier, expiry_date))
 
-        if msgs:
-            await context.bot.send_message(chat_id=USER_ID, text="Membership reminders:\n" + "\n".join(msgs))
+        if reminders:
+            # Sort by expiry date then name
+            reminders.sort(key=lambda x: (x[3], x[0].lower()))
+
+            lines = ["📢 Membership Expiry Reminder (tomorrow)\n"]
+            for idx, (name, email, tier, exp) in enumerate(reminders, start=1):
+                lines.append(
+                    f"{idx}. 👤 {name}\n"
+                    f"   📧 {email}\n"
+                    f"   🏷️ Tier: {tier}\n"
+                    f"   🗓 Expire: {exp.strftime('%Y-%m-%d')}\n"
+                )
+
+            await context.bot.send_message(chat_id=USER_ID, text="\n".join(lines))
 
     except Exception as e:
         logging.error(f"Error in daily_reminder: {e}")
@@ -249,8 +234,9 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("check", cmd_check))
 
-    # Daily reminder at midnight in configured TZ (server runs UTC; time below is TZ wall clock)
-    app.job_queue.run_daily(daily_reminder, time=dtime(hour=0, minute=0), name="daily_reminder")
+    # Daily reminders at 08:00 and 12:00 local TZ
+    app.job_queue.run_daily(daily_reminder, time=dtime(hour=8, minute=0), name="morning_reminder")
+    app.job_queue.run_daily(daily_reminder, time=dtime(hour=12, minute=0), name="noon_reminder")
 
     logging.info(f"Bot starting (polling). TZ={TZ_NAME}")
     app.run_polling()
