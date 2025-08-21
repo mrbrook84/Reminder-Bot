@@ -10,7 +10,7 @@ import time
 import logging
 import os
 import asyncio
-import json  # Added import for json module
+import json
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -20,17 +20,17 @@ scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ['GOOGLE_CREDENTIALS']), scope)
 client = gspread.authorize(creds)
 
-# Sheet names
-PAYMENT_SHEET = "Monthly Member Fee Payment (Responses)"
-APPLICATION_SHEET = "Music Membership Application (Responses)"
+# Sheet names (Updated to match "Form Responses 1" from screenshots)
+PAYMENT_SHEET = "Form Responses 1"  # For Monthly Member Fee Payment
+APPLICATION_SHEET = "Form Responses 1"  # For Music Membership Application
 
 # Telegram Bot setup
 BOT_TOKEN = os.environ['BOT_TOKEN']
 USER_ID = os.environ['USER_ID']
 
 # Load sheets
-payment_sheet = client.open(PAYMENT_SHEET).sheet1
-application_sheet = client.open(APPLICATION_SHEET).sheet1
+payment_sheet = client.open_by_key("1ffDReFiVQfH3Ss2nUEclha3cW8X2h3dglrdFtZX4cjc").worksheet(PAYMENT_SHEET)
+application_sheet = client.open_by_key("1WVqOCZeSGwoZuw5bauDn5eaLO51XLcMDhcZPWuKkrxw").worksheet(APPLICATION_SHEET)
 
 def parse_duration(comment):
     if not comment:
