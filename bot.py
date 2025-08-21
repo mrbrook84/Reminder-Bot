@@ -31,10 +31,8 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ["
 client = gspread.authorize(creds)
 
 # Sheet settings (edit if your worksheet/tab name differs)
-# Both sheets have the same worksheet title, which is why the code
-# must be updated to use the correct ID with the correct title.
 PAYMENT_SHEET_TITLE = "Form Responses 1"
-APPLICATION_SHEET_TITLE = "Form Responses 1" # Based on the new screenshots
+APPLICATION_SHEET_TITLE = "Form Responses" # Based on the new screenshots
 
 # Replace with your actual Google Sheet IDs
 PAYMENT_SHEET_ID = "1ffDReFiVQfH3Ss2nUEclha3cW8X2h3dglrdFtZX4cjc"
