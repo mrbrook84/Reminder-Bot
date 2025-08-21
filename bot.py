@@ -1,101 +1,258 @@
+import os
+import re
+import json
+import logging
+from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
+
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from datetime import datetime, time as dtime
+from dateutil import parser as date_parser
 from dateutil.relativedelta import relativedelta
-import re
-import logging
-import os
-import json
 
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
-# Setup logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# ---------- Logging ----------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
 
-# Google Sheets setup
+# ---------- ENV ----------
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+USER_ID = os.environ["USER_ID"]  # admin/chat id for reminders
+TZ_NAME = os.environ.get("TZ", "UTC")  # e.g. "Asia/Bangkok"
+TZ = ZoneInfo(TZ_NAME)
+
+# ---------- Google Sheets ----------
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ['GOOGLE_CREDENTIALS']), scope)
+creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scope)
 client = gspread.authorize(creds)
 
-# Sheet names
-PAYMENT_SHEET = "Form Responses 1"  # For Monthly Member Fee Payment
-APPLICATION_SHEET = "Form Responses 1"  # For Music Membership Application
+# Sheet settings (edit if your worksheet/tab name differs)
+PAYMENT_SHEET_TITLE = "Form Responses 1"
 
-# Telegram Bot setup
-BOT_TOKEN = os.environ['BOT_TOKEN']
-USER_ID = os.environ['USER_ID']
+# Replace with your actual Google Sheet IDs
+PAYMENT_SHEET_ID = "1ffDReFiVQfH3Ss2nUEclha3cW8X2h3dglrdFtZX4cjc"
+APPLICATION_SHEET_ID = "1WVqOCZeSGwoZuw5bauDn5eaLO51XLcMDhcZPWuKkrxw"  # not used below, but kept
 
-# Load sheets with provided Sheet IDs
-payment_sheet = client.open_by_key("1ffDReFiVQfH3Ss2nUEclha3cW8X2h3dglrdFtZX4cjc").worksheet(PAYMENT_SHEET)
-application_sheet = client.open_by_key("1WVqOCZeSGwoZuw5bauDn5eaLO51XLcMDhcZPWuKkrxw").worksheet(APPLICATION_SHEET)
+payment_ws = client.open_by_key(PAYMENT_SHEET_ID).worksheet(PAYMENT_SHEET_TITLE)
+# application_ws = client.open_by_key(APPLICATION_SHEET_ID).worksheet(PAYMENT_SHEET_TITLE)
 
-# Helper functions
-def parse_duration(comment):
-    if not comment:
-        return 1  # Default 1 month
-    match = re.search(r'(\d+)\s*month', comment, re.IGNORECASE)
-    return int(match.group(1)) if match else 1
-
-def calculate_expiry(payment_date, duration):
-    payment_date = datetime.strptime(payment_date, '%m/%d/%Y')
-    expiry_date = payment_date + relativedelta(months=duration)
-    days_left = (expiry_date - datetime.now()).days
-    return expiry_date, days_left
-
-# Telegram commands
-async def check_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------- Helpers ----------
+def parse_date_flexible(s: str):
+    """
+    Parse many common date formats from Google Sheets:
+    - "8/21/2025 15:23:11"
+    - "8/21/2025 0:26:04"
+    - "8/21/2025"
+    - and general variations (handled by dateutil)
+    Returns timezone-aware datetime in TZ, or None.
+    """
+    if not s:
+        return None
+    s = str(s).strip()
+    # special: allow "m/yyyy" -> use day 1
+    m = re.fullmatch(r"(\d{1,2})/(\d{4})", s)
+    if m:
+        month, year = int(m.group(1)), int(m.group(2))
+        return datetime(year, month, 1, tzinfo=TZ)
     try:
-        email = context.args[0] if context.args else None
-        if not email:
+        dt = date_parser.parse(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=TZ)
+        else:
+            dt = dt.astimezone(TZ)
+        return dt
+    except Exception:
+        logging.warning(f"Could not parse date string: {s}")
+        return None
+
+def parse_duration_months(comment: str) -> int:
+    """
+    Extract duration in months from "Any additional comments?".
+    - Default 1 month if missing
+    - Accepts "1 month", "3 months", "12 months", "for 3 months", "3 mo", "3 mth", etc.
+    """
+    if not comment:
+        return 1
+    comment = str(comment).lower()
+    m = re.search(r"(\d+)\s*(?:month|months|mo|mth|mnt)\b", comment)
+    if m:
+        months = int(m.group(1))
+        # basic sanity clamp
+        return max(1, min(months, 60))
+    return 1
+
+def pick_start_date(record: dict):
+    """
+    Prefer Payment Month if present; otherwise use Timestamp.
+    """
+    ts = record.get("Timestamp") or record.get("timestamp")
+    pay = record.get("Payment Month") or record.get("Payment Month ") or record.get("Pay Month")  # tolerant keys
+    pay_dt = parse_date_flexible(pay) if pay else None
+    ts_dt = parse_date_flexible(ts) if ts else None
+    return pay_dt or ts_dt
+
+def get_name(record: dict) -> str:
+    return (
+        record.get("Member Name")
+        or record.get("Name")
+        or record.get("Full Name")
+        or record.get("Telegram User Name")
+        or "Member"
+    )
+
+def get_comment(record: dict) -> str:
+    # tolerate both plural/singular headers
+    return record.get("Any additional comments?") or record.get("Any additional comment?") or ""
+
+def compute_status(record: dict):
+    """
+    Given a sheet row dict, compute:
+      - start_date (Payment Month preferred)
+      - months
+      - expiry_date
+      - days_left
+    Returns tuple or None if cannot compute.
+    """
+    start_date = pick_start_date(record)
+    if not start_date:
+        return None
+
+    months = parse_duration_months(get_comment(record))
+    expiry_date = start_date + relativedelta(months=months)
+
+    now = datetime.now(TZ)
+    days_left = (expiry_date.date() - now.date()).days  # date-based difference
+    return start_date, months, expiry_date, days_left
+
+def latest_record_for_email(email: str):
+    """
+    Scan all records for this email; pick the one with the latest start_date.
+    """
+    records = payment_ws.get_all_records()
+    best = None
+    best_start = None
+
+    for r in records:
+        e = (r.get("Email Address") or r.get("Email") or "").strip().lower()
+        if e != email.strip().lower():
+            continue
+        status = compute_status(r)
+        if not status:
+            continue
+        start_date, _, _, _ = status
+        if (best_start is None) or (start_date > best_start):
+            best_start = start_date
+            best = r
+
+    return best
+
+# ---------- Telegram Handlers ----------
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Hello! 🔎 ใช้คำสั่ง\n"
+        "/check <email>\n"
+        "membership ကျန်ထားသေးသလား စစ်ပေးနိုင်ပါတယ်။"
+    )
+
+async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        if not context.args:
             await update.message.reply_text("Usage: /check <email>")
             return
 
-        records = payment_sheet.get_all_records()
-        latest_payment = None
-        for record in records:
-            if record['Email Address'].lower() == email.lower():
-                if not latest_payment or datetime.strptime(record['Timestamp'], '%m/%d/%Y') > datetime.strptime(latest_payment['Timestamp'], '%m/%d/%Y'):
-                    latest_payment = record
-
-        if not latest_payment:
-            await update.message.reply_text(f"No payment record found for {email}")
+        email = " ".join(context.args).strip()
+        rec = latest_record_for_email(email)
+        if not rec:
+            await update.message.reply_text(f"❌ No record found for {email}")
             return
 
-        member_name = latest_payment['Member Name']
-        payment_date = latest_payment['Timestamp']
-        comment = latest_payment.get('Any additional comments?', '')
-        duration = parse_duration(comment)
-        expiry_date, days_left = calculate_expiry(payment_date, duration)
+        name = get_name(rec)
+        status = compute_status(rec)
+        if not status:
+            await update.message.reply_text("⚠️ Cannot compute dates for this record.")
+            return
 
-        await update.message.reply_text(f"{member_name} ရဲ့ membership expires in {days_left} days.")
+        start_date, months, expiry_date, days_left = status
+        used_source = "Payment Month" if rec.get("Payment Month") else "Timestamp"
+        tier = rec.get("Preferred Membership Tier") or rec.get("Membership Tier") or "-"
+
+        # Nicely formatted reply
+        text = (
+            f"👤 {name}\n"
+            f"📧 {email}\n"
+            f"🏷️ Tier: {tier}\n"
+            f"🗓 Start ({used_source}): {start_date.strftime('%Y-%m-%d')}\n"
+            f"⏳ Duration: {months} month(s)\n"
+            f"🏁 Expire: {expiry_date.strftime('%Y-%m-%d')}\n"
+        )
+
+        if days_left > 1:
+            text += f"✅ Remaining: {days_left} days"
+        elif days_left == 1:
+            text += "⚠️ Remaining: 1 day"
+        elif days_left == 0:
+            text += "⏰ Expiring today!"
+        else:
+            text += f"❌ Expired {abs(days_left)} day(s) ago"
+
+        await update.message.reply_text(text)
+
     except Exception as e:
         logging.error(f"Error in check_command: {e}")
         await update.message.reply_text("An error occurred. Please try again.")
 
-# Reminder job
-async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
-    records = payment_sheet.get_all_records()
-    for record in records:
-        payment_date = record['Timestamp']
-        comment = record.get('Any additional comments?', '')
-        duration = parse_duration(comment)
-        expiry_date, days_left = calculate_expiry(payment_date, duration)
-        if days_left == 1:
-            member_name = record['Member Name']
-            await context.bot.send_message(chat_id=USER_ID, text=f"{member_name} ရဲ့ membership expires in 1 day.")
+async def daily_reminder(context: ContextTypes.DEFAULT_TYPE):
+    """
+    Send a reminder to admin USER_ID for members expiring in 1 day (latest per email).
+    """
+    try:
+        records = payment_ws.get_all_records()
+        # Build latest-by-email first
+        latest_by_email = {}
+        for r in records:
+            email = (r.get("Email Address") or r.get("Email") or "").strip().lower()
+            if not email:
+                continue
+            status = compute_status(r)
+            if not status:
+                continue
+            start_date, _, _, _ = status
+            prev = latest_by_email.get(email)
+            if (prev is None) or (start_date > prev[0]):
+                latest_by_email[email] = (start_date, r)
 
-# Main function (Polling)
+        # Check expiring
+        msgs = []
+        for email, (_, r) in latest_by_email.items():
+            res = compute_status(r)
+            if not res:
+                continue
+            _, _, expiry_date, days_left = res
+            if days_left == 1:
+                name = get_name(r)
+                msgs.append(f"⏰ {name} ({email}) expires tomorrow ({expiry_date.strftime('%Y-%m-%d')})")
+
+        if msgs:
+            await context.bot.send_message(chat_id=USER_ID, text="Membership reminders:\n" + "\n".join(msgs))
+
+    except Exception as e:
+        logging.error(f"Error in daily_reminder: {e}")
+
+# ---------- Main (Polling) ----------
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Add command handler
-    app.add_handler(CommandHandler("check", check_command))
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("check", cmd_check))
 
-    # Daily reminder at midnight (UTC timezone by default)
-    app.job_queue.run_daily(send_reminder, time=dtime(hour=0, minute=0))
+    # Daily reminder at midnight in configured TZ (server runs UTC; time below is TZ wall clock)
+    app.job_queue.run_daily(daily_reminder, time=dtime(hour=0, minute=0), name="daily_reminder")
 
-    # Start polling (no need for asyncio.run)
+    logging.info(f"Bot starting (polling). TZ={TZ_NAME}")
     app.run_polling()
 
 if __name__ == "__main__":
