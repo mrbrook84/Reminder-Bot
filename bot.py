@@ -20,7 +20,7 @@ scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ['GOOGLE_CREDENTIALS']), scope)
 client = gspread.authorize(creds)
 
-# Sheet names (Updated to match "Form Responses 1" from screenshots)
+# Sheet names
 PAYMENT_SHEET = "Form Responses 1"  # For Monthly Member Fee Payment
 APPLICATION_SHEET = "Form Responses 1"  # For Music Membership Application
 
@@ -28,7 +28,7 @@ APPLICATION_SHEET = "Form Responses 1"  # For Music Membership Application
 BOT_TOKEN = os.environ['BOT_TOKEN']
 USER_ID = os.environ['USER_ID']
 
-# Load sheets
+# Load sheets with provided Sheet IDs
 payment_sheet = client.open_by_key("1ffDReFiVQfH3Ss2nUEclha3cW8X2h3dglrdFtZX4cjc").worksheet(PAYMENT_SHEET)
 application_sheet = client.open_by_key("1WVqOCZeSGwoZuw5bauDn5eaLO51XLcMDhcZPWuKkrxw").worksheet(APPLICATION_SHEET)
 
@@ -94,9 +94,10 @@ def run_schedule():
 async def main():
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("check", check_command))
+    await app.bot.set_webhook(url="https://reminder-bot-production.up.railway.app/webhook")
     await app.initialize()
     await app.start()
-    await app.updater.start_polling()
+    await app.updater.start_webhook(listen="0.0.0.0", port=int(os.environ.get('PORT', 5000)), url_path="/webhook")
     run_schedule()
 
 if __name__ == '__main__':
