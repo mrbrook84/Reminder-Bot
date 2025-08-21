@@ -131,28 +131,33 @@ def compute_status(record: dict):
     days_left = (expiry_date.date() - now.date()).days  # date-based difference
     return start_date, months, expiry_date, days_left
 
-def latest_record_for_email(email: str):
+def latest_record_for_user(query: str):
     """
-    Scan all records from BOTH sheets for this email; pick the one with the latest start_date.
+    Scan all records from BOTH sheets for this email or Telegram username; pick the one with the latest start_date.
     """
     payment_records = payment_ws.get_all_records()
     application_records = application_ws.get_all_records()
     all_records = payment_records + application_records
+    
+    # Normalize query for case-insensitive matching
+    query_norm = query.strip().lower()
 
     best = None
     best_start = None
 
     for r in all_records:
-        e = (r.get("Email Address") or r.get("Email") or "").strip().lower()
-        if e != email.strip().lower():
-            continue
-        status = compute_status(r)
-        if not status:
-            continue
-        start_date, _, _, _ = status
-        if (best_start is None) or (start_date > best_start):
-            best_start = start_date
-            best = r
+        email = (r.get("Email Address") or r.get("Email") or "").strip().lower()
+        telegram_name = (r.get("Telegram User Name") or r.get("Telegram Username") or "").strip().lower()
+
+        # Check for a match
+        if (email == query_norm) or (telegram_name == query_norm):
+            status = compute_status(r)
+            if not status:
+                continue
+            start_date, _, _, _ = status
+            if (best_start is None) or (start_date > best_start):
+                best_start = start_date
+                best = r
 
     return best
 
@@ -160,20 +165,20 @@ def latest_record_for_email(email: str):
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Hello! 🔎 ใช้คำสั่ง\n"
-        "/check <email>\n"
+        "/check <email or Telegram username>\n"
         "membership ကျန်ထားသေးသလား စစ်ပေးနိုင်ပါတယ်။"
     )
 
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if not context.args:
-            await update.message.reply_text("Usage: /check <email>")
+            await update.message.reply_text("Usage: /check <email or Telegram username>")
             return
 
-        email = " ".join(context.args).strip()
-        rec = latest_record_for_email(email)
+        query = " ".join(context.args).strip()
+        rec = latest_record_for_user(query)
         if not rec:
-            await update.message.reply_text(f"❌ No record found for {email}")
+            await update.message.reply_text(f"❌ No record found for {query}")
             return
 
         name = get_name(rec)
@@ -185,11 +190,13 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         start_date, months, expiry_date, days_left = status
         used_source = "Payment Month" if rec.get("Payment Month") else "Timestamp"
         tier = rec.get("Preferred Membership Tier") or rec.get("Membership Tier") or "-"
+        telegram_user = rec.get("Telegram User Name") or rec.get("Telegram Username") or "-"
 
         # Nicely formatted reply
         text = (
             f"👤 {name}\n"
-            f"📧 {email}\n"
+            f"📧 Email: {rec.get('Email Address') or '-'}\n"
+            f"📞 Telegram: {telegram_user}\n"
             f"🏷️ Tier: {tier}\n"
             f"🗓 Start ({used_source}): {start_date.strftime('%Y-%m-%d')}\n"
             f"⏳ Duration: {months} month(s)\n"
