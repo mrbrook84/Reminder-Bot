@@ -32,7 +32,7 @@ client = gspread.authorize(creds)
 
 # Sheet settings (edit if your worksheet/tab name differs)
 PAYMENT_SHEET_TITLE = "Form Responses 1"
-APPLICATION_SHEET_TITLE = "Form Responses" # Based on the new screenshots
+APPLICATION_SHEET_TITLE = "Form Responses"
 
 # Replace with your actual Google Sheet IDs
 PAYMENT_SHEET_ID = "1ffDReFiVQfH3Ss2nUEclha3cW8X2h3dglrdFtZX4cjc"
@@ -258,8 +258,9 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("check", cmd_check))
 
-    # Daily reminder at midnight in configured TZ (server runs UTC; time below is TZ wall clock)
-    app.job_queue.run_daily(daily_reminder, time=dtime(hour=0, minute=0), name="daily_reminder")
+    # Daily reminder at 8 AM and 12 PM in configured TZ
+    app.job_queue.run_daily(daily_reminder, time=dtime(hour=8, minute=0), name="daily_reminder_morning")
+    app.job_queue.run_daily(daily_reminder, time=dtime(hour=12, minute=0), name="daily_reminder_noon")
 
     logging.info(f"Bot starting (polling). TZ={TZ_NAME}")
     app.run_polling()
