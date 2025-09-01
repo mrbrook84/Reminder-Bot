@@ -35,8 +35,8 @@ PAYMENT_SHEET_TITLE = "Form Responses 1"
 APPLICATION_SHEET_TITLE = "Form Responses"
 
 # Replace with your actual Google Sheet IDs
-PAYMENT_SHEET_ID = "1ffDReFiVQfH3Ss2nUEclha3cW8X2h3dglrdFtZX4cjc"
-APPLICATION_SHEET_ID = "1WVqOCZeSGwoZuw5bauDn5eaLO51XLcMDhcZPWuKkrxw"
+PAYMENT_SHEET_ID = "1TGTmAXV2X9U0r3PBEq41_LV6BpSE5QSJnWaszG0DFJk"
+APPLICATION_SHEET_ID = "1RHViIWFcg005F52mfv6eFCDZo6U2ROiLbfn8PJkjk2Y"
 
 # Open both worksheets
 payment_ws = client.open_by_key(PAYMENT_SHEET_ID).worksheet(PAYMENT_SHEET_TITLE)
