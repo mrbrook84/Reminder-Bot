@@ -31,8 +31,8 @@ creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ["
 client = gspread.authorize(creds)
 
 # Sheet settings (edit if your worksheet/tab name differs)
-PAYMENT_SHEET_TITLE = "Form Responses 1"
-APPLICATION_SHEET_TITLE = "Form Responses"
+PAYMENT_SHEET_TITLE = "Form Responses"
+APPLICATION_SHEET_TITLE = "Form Responses 1"
 
 # Replace with your actual Google Sheet IDs
 PAYMENT_SHEET_ID = "1TGTmAXV2X9U0r3PBEq41_LV6BpSE5QSJnWaszG0DFJk"
