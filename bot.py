@@ -11,7 +11,12 @@ from dateutil import parser as date_parser
 from dateutil.relativedelta import relativedelta
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    ApplicationBuilder,
+)
 
 # ---------- Logging ----------
 logging.basicConfig(
@@ -45,18 +50,9 @@ application_ws = client.open_by_key(APPLICATION_SHEET_ID).worksheet(APPLICATION_
 
 # ---------- Helpers ----------
 def parse_date_flexible(s: str):
-    """
-    Parse many common date formats from Google Sheets:
-    - "8/21/2025 15:23:11"
-    - "8/21/2025 0:26:04"
-    - "8/21/2025"
-    - and general variations (handled by dateutil)
-    Returns timezone-aware datetime in TZ, or None.
-    """
     if not s:
         return None
     s = str(s).strip()
-    # special: allow "m/yyyy" -> use day 1
     m = re.fullmatch(r"(\d{1,2})/(\d{4})", s)
     if m:
         month, year = int(m.group(1)), int(m.group(2))
@@ -73,27 +69,18 @@ def parse_date_flexible(s: str):
         return None
 
 def parse_duration_months(comment: str) -> int:
-    """
-    Extract duration in months from "Any additional comments?".
-    - Default 1 month if missing
-    - Accepts "1 month", "3 months", "12 months", "for 3 months", "3 mo", "3 mth", etc.
-    """
     if not comment:
         return 1
     comment = str(comment).lower()
     m = re.search(r"(\d+)\s*(?:month|months|mo|mth|mnt)\b", comment)
     if m:
         months = int(m.group(1))
-        # basic sanity clamp
         return max(1, min(months, 60))
     return 1
 
 def pick_start_date(record: dict):
-    """
-    Prefer Payment Month if present; otherwise use Timestamp.
-    """
     ts = record.get("Timestamp") or record.get("timestamp")
-    pay = record.get("Payment Month") or record.get("Payment Month ") or record.get("Pay Month")  # tolerant keys
+    pay = record.get("Payment Month") or record.get("Payment Month ") or record.get("Pay Month")
     pay_dt = parse_date_flexible(pay) if pay else None
     ts_dt = parse_date_flexible(ts) if ts else None
     return pay_dt or ts_dt
@@ -108,18 +95,9 @@ def get_name(record: dict) -> str:
     )
 
 def get_comment(record: dict) -> str:
-    # tolerate both plural/singular headers
     return record.get("Any additional comments?") or record.get("Any additional comment?") or ""
 
 def compute_status(record: dict):
-    """
-    Given a sheet row dict, compute:
-      - start_date (Payment Month preferred)
-      - months
-      - expiry_date
-      - days_left
-    Returns tuple or None if cannot compute.
-    """
     start_date = pick_start_date(record)
     if not start_date:
         return None
@@ -128,18 +106,14 @@ def compute_status(record: dict):
     expiry_date = start_date + relativedelta(months=months)
 
     now = datetime.now(TZ)
-    days_left = (expiry_date.date() - now.date()).days  # date-based difference
+    days_left = (expiry_date.date() - now.date()).days
     return start_date, months, expiry_date, days_left
 
 def latest_record_for_user(query: str):
-    """
-    Scan all records from BOTH sheets for this email or Telegram username; pick the one with the latest start_date.
-    """
     payment_records = payment_ws.get_all_records()
     application_records = application_ws.get_all_records()
     all_records = payment_records + application_records
     
-    # Normalize query for case-insensitive matching
     query_norm = query.strip().lower()
 
     best = None
@@ -149,7 +123,6 @@ def latest_record_for_user(query: str):
         email = (r.get("Email Address") or r.get("Email") or "").strip().lower()
         telegram_name = (r.get("Telegram User Name") or r.get("Telegram Username") or "").strip().lower()
 
-        # Check for a match
         if (email == query_norm) or (telegram_name == query_norm):
             status = compute_status(r)
             if not status:
@@ -192,7 +165,6 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tier = rec.get("Preferred Membership Tier") or rec.get("Membership Tier") or "-"
         telegram_user = rec.get("Telegram User Name") or rec.get("Telegram Username") or "-"
 
-        # Nicely formatted reply
         text = (
             f"👤 {name}\n"
             f"📧 Email: {rec.get('Email Address') or '-'}\n"
@@ -219,15 +191,11 @@ async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("An error occurred. Please try again.")
 
 async def daily_reminder(context: ContextTypes.DEFAULT_TYPE):
-    """
-    Send a reminder to admin USER_ID for members expiring in 1 day (latest per email).
-    """
     try:
         payment_records = payment_ws.get_all_records()
         application_records = application_ws.get_all_records()
         all_records = payment_records + application_records
 
-        # Build latest-by-email first
         latest_by_email = {}
         for r in all_records:
             email = (r.get("Email Address") or r.get("Email") or "").strip().lower()
@@ -241,7 +209,6 @@ async def daily_reminder(context: ContextTypes.DEFAULT_TYPE):
             if (prev is None) or (start_date > prev[0]):
                 latest_by_email[email] = (start_date, r)
 
-        # Check expiring
         msgs = []
         for email, (_, r) in latest_by_email.items():
             res = compute_status(r)
@@ -258,19 +225,30 @@ async def daily_reminder(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(f"Error in daily_reminder: {e}")
 
-# ---------- Main (Polling) ----------
+# ---------- Main (Entry Point) ----------
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-
+    
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("check", cmd_check))
 
-    # Daily reminder at 8 AM and 12 PM in configured TZ
     app.job_queue.run_daily(daily_reminder, time=dtime(hour=8, minute=0), name="daily_reminder_morning")
     app.job_queue.run_daily(daily_reminder, time=dtime(hour=12, minute=0), name="daily_reminder_noon")
 
-    logging.info(f"Bot starting (polling). TZ={TZ_NAME}")
-    app.run_polling()
+    # Determine whether to run with polling or webhook
+    webhook_url = os.environ.get("WEBHOOK_URL")
+    if webhook_url:
+        port = int(os.environ.get("PORT", "8000"))
+        logging.info(f"Bot starting with webhook. URL={webhook_url}")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=port,
+            url_path=BOT_TOKEN,
+            webhook_url=f"{webhook_url}{BOT_TOKEN}",
+        )
+    else:
+        logging.warning("WEBHOOK_URL not set, running with polling...")
+        app.run_polling()
 
 if __name__ == "__main__":
     main()
