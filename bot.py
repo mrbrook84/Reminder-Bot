@@ -16,6 +16,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     ApplicationBuilder,
+    ExtBot,
 )
 
 # ---------- Logging ----------
@@ -26,8 +27,8 @@ logging.basicConfig(
 
 # ---------- ENV ----------
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-USER_ID = os.environ["USER_ID"]  # admin/chat id for reminders
-TZ_NAME = os.environ.get("TZ", "UTC")  # e.g. "Asia/Bangkok"
+USER_ID = os.environ["USER_ID"]
+TZ_NAME = os.environ.get("TZ", "UTC")
 TZ = ZoneInfo(TZ_NAME)
 
 # ---------- Google Sheets ----------
@@ -35,18 +36,14 @@ scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/au
 creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scope)
 client = gspread.authorize(creds)
 
-# Sheet settings (edit if your worksheet/tab name differs)
 PAYMENT_SHEET_TITLE = "Form Responses"
 APPLICATION_SHEET_TITLE = "Form Responses 1"
 
-# Replace with your actual Google Sheet IDs
 PAYMENT_SHEET_ID = "1TGTmAXV2X9U0r3PBEq41_LV6BpSE5QSJnWaszG0DFJk"
 APPLICATION_SHEET_ID = "1RHViIWFcg005F52mfv6eFCDZo6U2ROiLbfn8PJkjk2Y"
 
-# Open both worksheets
 payment_ws = client.open_by_key(PAYMENT_SHEET_ID).worksheet(PAYMENT_SHEET_TITLE)
 application_ws = client.open_by_key(APPLICATION_SHEET_ID).worksheet(APPLICATION_SHEET_TITLE)
-
 
 # ---------- Helpers ----------
 def parse_date_flexible(s: str):
@@ -225,6 +222,11 @@ async def daily_reminder(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(f"Error in daily_reminder: {e}")
 
+# ---------- Health Check ----------
+async def health_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Respond to the health check request."""
+    await update.message.reply_text("OK")
+
 # ---------- Main (Entry Point) ----------
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
@@ -232,8 +234,11 @@ def main():
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("check", cmd_check))
 
-    app.job_queue.run_daily(daily_reminder, time=dtime(hour=8, minute=0), name="daily_reminder_morning")
-    app.job_queue.run_daily(daily_reminder, time=dtime(hour=12, minute=0), name="daily_reminder_noon")
+    app.job_queue.run_daily(daily_reminder, time=dtime(hour=8, minute=0, tzinfo=TZ), name="daily_reminder_morning")
+    app.job_queue.run_daily(daily_reminder, time=dtime(hour=12, minute=0, tzinfo=TZ), name="daily_reminder_noon")
+
+    # This is the new part for the health check
+    app.add_handler(CommandHandler("health", health_check))
 
     # Determine whether to run with polling or webhook
     webhook_url = os.environ.get("WEBHOOK_URL")
