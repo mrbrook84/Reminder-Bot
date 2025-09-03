@@ -134,9 +134,9 @@ def latest_record_for_user(query: str):
 # ---------- Telegram Handlers ----------
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Hello! 🔎 ใช้คำสั่ง\n"
+        "မင်္ဂလာပါ 🔎 လူကြီးမင်းရဲ့ Membership သက်တမ်းကို"
         "/check <email or Telegram username>\n"
-        "membership ကျန်ထားသေးသလား စစ်ပေးနိုင်ပါတယ်။"
+        "command နဲ့ စစ်ဆေးနိုင်ပါတယ်။"
     )
 
 async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
