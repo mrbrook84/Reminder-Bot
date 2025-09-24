@@ -2,71 +2,48 @@ import os
 import re
 import json
 import logging
-import sys # <--- DEBUGGING အတွက် ထည့်ထားတာ
 from datetime import datetime, time as dtime
 from zoneinfo import ZoneInfo
 
-# ---------- Logging (ပိုပြီးအသေးစိတ်မြင်ရအောင် DEBUG level ကိုပြောင်းထား) ----------
-logging.basicConfig(
-    level=logging.INFO, # ပြဿနာရှာရလွယ်အောင် INFO ကိုပြောင်းထား
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    stream=sys.stdout, # Log တွေက console မှာ တန်းပေါ်အောင်
-)
-
-logging.info("Script starting up...")
-
-try:
-    # ---------- ENV (Variable တွေအားလုံးကို ဒီမှာစစ်မယ်) ----------
-    logging.info("Loading environment variables...")
-    BOT_TOKEN = os.environ["BOT_TOKEN"]
-    USER_ID = os.environ["USER_ID"]
-    GOOGLE_CREDENTIALS_JSON = os.environ["GOOGLE_CREDENTIALS"]
-    TZ_NAME = os.environ.get("TZ", "UTC")
-    logging.info("Successfully loaded environment variables from OS.")
-
-    logging.info(f"Timezone set to: {TZ_NAME}")
-    TZ = ZoneInfo(TZ_NAME)
-
-    # ---------- Google Sheets (ဒီနေရာက Error တက်နိုင်ခြေများတယ်) ----------
-    logging.info("Parsing Google Credentials JSON...")
-    google_creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
-    logging.info("Successfully parsed Google Credentials JSON.")
-
-    from oauth2client.service_account import ServiceAccountCredentials
-    import gspread
-
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(google_creds_dict, scope)
-    
-    logging.info("Authorizing gspread client...")
-    client = gspread.authorize(creds)
-    logging.info("Successfully authorized gspread client.")
-
-    PAYMENT_SHEET_TITLE = "Form Responses"
-    APPLICATION_SHEET_TITLE = "Form Responses 1"
-    PAYMENT_SHEET_ID = "1TGTmAXV2X9U0r3PBEq41_LV6BpSE5QSJnWaszG0DFJk"
-    APPLICATION_SHEET_ID = "1RHViIWFcg005F52mfv6eFCDZo6U2ROiLbfn8PJkjk2Y"
-
-    logging.info("Opening Google Sheets...")
-    payment_ws = client.open_by_key(PAYMENT_SHEET_ID).worksheet(PAYMENT_SHEET_TITLE)
-    application_ws = client.open_by_key(APPLICATION_SHEET_ID).worksheet(APPLICATION_SHEET_TITLE)
-    logging.info("Successfully opened Google Sheets.")
-
-except KeyError as e:
-    logging.critical(f"FATAL: Missing a critical environment variable: {e}")
-    sys.exit(1) # Missing variable ဆိုရင် bot ကိုရပ်ပစ်မယ်
-except json.JSONDecodeError as e:
-    logging.critical(f"FATAL: GOOGLE_CREDENTIALS JSON is malformed and cannot be parsed. Error: {e}")
-    sys.exit(1) # JSON မှားနေရင် bot ကိုရပ်ပစ်မယ်
-except Exception as e:
-    logging.critical(f"FATAL: An unexpected error occurred during initialization: {e}", exc_info=True)
-    sys.exit(1) # တခြားမထင်မှတ်တဲ့ error ဆိုရင် bot ကိုရပ်ပစ်မယ်
-
-# --- ဒီနေရာကစပြီး ကျန်တဲ့ code တွေက မူရင်းအတိုင်းပဲ ---
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from dateutil import parser as date_parser
 from dateutil.relativedelta import relativedelta
+
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    ApplicationBuilder,
+    ExtBot,
+)
+
+# ---------- Logging ----------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+
+# ---------- ENV ----------
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+USER_ID = os.environ["USER_ID"]
+TZ_NAME = os.environ.get("TZ", "UTC")
+TZ = ZoneInfo(TZ_NAME)
+
+# ---------- Google Sheets ----------
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(json.loads(os.environ["GOOGLE_CREDENTIALS"]), scope)
+client = gspread.authorize(creds)
+
+PAYMENT_SHEET_TITLE = "Form Responses"
+APPLICATION_SHEET_TITLE = "Form Responses 1"
+
+PAYMENT_SHEET_ID = "1TGTmAXV2X9U0r3PBEq41_LV6BpSE5QSJnWaszG0DFJk"
+APPLICATION_SHEET_ID = "1RHViIWFcg005F52mfv6eFCDZo6U2ROiLbfn8PJkjk2Y"
+
+payment_ws = client.open_by_key(PAYMENT_SHEET_ID).worksheet(PAYMENT_SHEET_TITLE)
+application_ws = client.open_by_key(APPLICATION_SHEET_ID).worksheet(APPLICATION_SHEET_TITLE)
 
 # ---------- Helpers ----------
 def parse_date_flexible(s: str):
@@ -245,9 +222,13 @@ async def daily_reminder(context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(f"Error in daily_reminder: {e}")
 
+# ---------- Health Check ----------
+async def health_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Respond to the health check request."""
+    await update.message.reply_text("OK")
+
 # ---------- Main (Entry Point) ----------
 def main():
-    logging.info("Setting up Telegram application...")
     app = Application.builder().token(BOT_TOKEN).build()
     
     app.add_handler(CommandHandler("start", cmd_start))
@@ -256,10 +237,14 @@ def main():
     app.job_queue.run_daily(daily_reminder, time=dtime(hour=8, minute=0, tzinfo=TZ), name="daily_reminder_morning")
     app.job_queue.run_daily(daily_reminder, time=dtime(hour=12, minute=0, tzinfo=TZ), name="daily_reminder_noon")
 
+    # This is the new part for the health check
+    app.add_handler(CommandHandler("health", health_check))
+
+    # Determine whether to run with polling or webhook
     webhook_url = os.environ.get("WEBHOOK_URL")
     if webhook_url:
         port = int(os.environ.get("PORT", "8000"))
-        logging.info(f"Bot starting with webhook. PORT={port}, URL={webhook_url}")
+        logging.info(f"Bot starting with webhook. URL={webhook_url}")
         app.run_webhook(
             listen="0.0.0.0",
             port=port,
@@ -269,8 +254,6 @@ def main():
     else:
         logging.warning("WEBHOOK_URL not set, running with polling...")
         app.run_polling()
-
-    logging.info("Bot application started.")
 
 if __name__ == "__main__":
     main()
