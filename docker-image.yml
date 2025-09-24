@@ -1,0 +1,35 @@
+name: Build and Push Docker Image
+
+# main branch ကို push တင်လိုက်တဲ့အခါတိုင်း ဒီ workflow ကို run ပါမယ်။
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build-and-push:
+    # ubuntu-latest virtual machine ပေါ်မှာ run ပါမယ်။
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. Repository ထဲက code တွေကို runner ဆီ checkout လုပ် (clone ဆွဲ) ပါမယ်။
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Docker Hub ကို login ဝင်ပါမယ်။
+      # Username နဲ့ Token ကို GitHub Secrets ထဲမှာ လုံခြုံစွာသိမ်းထားပြီး ဒီမှာပြန်သုံးပါမယ်။
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PW}}
+
+      # 3. Dockerfile ကိုသုံးပြီး image တည်ဆောက်ကာ Docker Hub ကို push တင်ပါမယ်။
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          # !!! အရေးကြီး !!! 
+          # ဒီနေရာမှာ `your-dockerhub-username/your-repo-name` ကို
+          # သင့်ရဲ့ Docker Hub Username, သင်ပေးချင်တဲ့ image နာမည်နဲ့ ပြောင်းထည့်ပါ။
+          tags: gberube/main:reminder
