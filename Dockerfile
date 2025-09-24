@@ -1,35 +1,24 @@
-name: Build and Push Docker Image
+# Base image အဖြစ် Python 3.10-slim ကိုအသုံးပြုပါမယ်။
+# slim version က image size သေးငယ်စေပါတယ်။
+FROM python:3.10-slim
 
-# main branch ကို push တင်လိုက်တဲ့အခါတိုင်း ဒီ workflow ကို run ပါမယ်။
-on:
-  push:
-    branches: [ "main" ]
+# Container ထဲမှာ အလုပ်လုပ်မယ့် Directory ကို /app လို့သတ်မှတ်ပါမယ်။
+WORKDIR /app
 
-jobs:
-  build-and-push:
-    # ubuntu-latest virtual machine ပေါ်မှာ run ပါမယ်။
-    runs-on: ubuntu-latest
+# ပထမဆုံး requirements.txt ကိုအရင်ကူးထည့်ပါမယ်။
+# ဒါမှနောက်ပိုင်း code ပြင်တဲ့အခါတိုင်း dependency တွေကိုပြန်ပြန် install လုပ်နေမှာမဟုတ်တော့ပါဘူး။
+COPY requirements.txt .
 
-    steps:
-      # 1. Repository ထဲက code တွေကို runner ဆီ checkout လုပ် (clone ဆွဲ) ပါမယ်။
-      - name: Checkout repository
-        uses: actions/checkout@v4
+# requirements.txt ထဲမှာပါတဲ့ library တွေကို install လုပ်ပါမယ်။
+RUN pip install --no-cache-dir -r requirements.txt
 
-      # 2. Docker Hub ကို login ဝင်ပါမယ်။
-      # Username နဲ့ Token ကို GitHub Secrets ထဲမှာ လုံခြုံစွာသိမ်းထားပြီး ဒီမှာပြန်သုံးပါမယ်။
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+# ကျန်တဲ့ project file တွေအားလုံးကို container ထဲက /app directory ထဲကိုကူးထည့်ပါမယ်။
+COPY . .
 
-      # 3. Dockerfile ကိုသုံးပြီး image တည်ဆောက်ကာ Docker Hub ကို push တင်ပါမယ်။
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          # !!! အရေးကြီး !!! 
-          # ဒီနေရာမှာ `your-dockerhub-username/your-repo-name` ကို
-          # သင့်ရဲ့ Docker Hub Username, သင်ပေးချင်တဲ့ image နာမည်နဲ့ ပြောင်းထည့်ပါ။
-          tags: your-dockerhub-username/your-repo-name:latest
+# သင့် bot ဟာ webhook mode မှာ run တဲ့အခါ port 8000 ကိုအသုံးပြုမှာဖြစ်တဲ့အတွက်
+# ဒီ port ကို container ကနေ expose လုပ်ထားကြောင်း ကြေညာပါမယ်။
+EXPOSE 8000
+
+# Container ကို run လိုက်တဲ့အခါ "python bot.py" ဆိုတဲ့ command ကိုအလုပ်လုပ်စေပါမယ်။
+# ဒီ command က သင့်ရဲ့ Procfile ထဲက web: python bot.py ကနေရယူထားတာဖြစ်ပါတယ်။ [cite: 2]
+CMD ["python", "bot.py"]
