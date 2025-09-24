@@ -2,3 +2,4 @@ python-telegram-bot[job-queue,webhooks]==20.6
 gspread
 oauth2client
 python-dateutil
+tzdata
